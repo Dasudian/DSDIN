@@ -1,0 +1,745 @@
+-module(dsdhttp_dispatch_ext).
+
+-export([handle_request/3]).
+
+-import(dsdu_debug, [pp/1]).
+-import(dsdhttp_helpers, [ process_request/2
+                        , read_required_params/1
+                        , read_optional_params/1
+                        , parse_map_to_atom_keys/0
+                        , base58_decode/1
+                        , hexstrings_decode/1
+                        , nameservice_pointers_decode/1
+                        , get_nonce/1
+                        , print_state/0
+                        , get_contract_code/2
+                        , get_contract_call_object_from_tx/2
+                        , verify_oracle_existence/1
+                        , verify_oracle_query_existence/2
+                        , verify_name/1
+                        , ttl_decode/1
+                        , parse_tx_encoding/1
+                        , compute_contract_call_data/0
+                        , relative_ttl_decode/1
+                        , unsigned_tx_response/1
+                        , get_transaction/2
+                        , encode_transaction/3
+                        , ok_response/1
+                        , read_tx_encoding_param/1
+                        , parse_filter_param/2
+                        , read_optional_param/3
+                        , get_block/3
+                        , get_block/4
+                        ]).
+
+-compile({parse_transform, lager_transform}).
+
+-spec handle_request(
+        OperationID :: atom(),
+        Req :: cowboy_req:req(),
+        Context :: #{}
+       ) -> {Status :: cowboy:http_status(), Headers :: list(), Body :: map()}.
+
+handle_request('GetTop', _, _Context) ->
+    {ok, TopHeader} = dsdhttp_logic:get_top(),
+    {ok, Hash} = dsdc_headers:hash_header(TopHeader),
+    EncodedHash = dsdc_base58c:encode(block_hash, Hash),
+    EncodedHeader = dsdhttp_api_parser:encode(header, TopHeader),
+    {200, [], maps:put(<<"hash">>, EncodedHash, EncodedHeader)};
+
+handle_request('GetBlockGenesis', Req, _Context) ->
+    get_block(fun dsdhttp_logic:get_block_genesis/0, Req, json);
+
+handle_request('GetBlockLatest', Req, _Context) ->
+    get_block(fun dsdhttp_logic:get_block_latest/0, Req, json);
+
+handle_request('GetBlockPending', Req, _Context) ->
+    get_block(fun dsdhttp_logic:get_block_pending/0, Req, json, false);
+
+handle_request('GetBlockByHeight', Req, _Context) ->
+    Height = maps:get('height', Req),
+    get_block(fun() -> dsdhttp_logic:get_block_by_height(Height) end, Req, json);
+
+handle_request('GetBlockByHeightDeprecated', Req, _Context) ->
+    Height = maps:get('height', Req),
+    case dsdhttp_logic:get_block_by_height(Height) of
+        {ok, Block} ->
+            {200, [], dsdhttp_api_parser:encode(block, Block)};
+        {error, block_not_found} ->
+            {404, [], #{reason => <<"Block not found">>}};
+        {error, chain_too_short} ->
+            {404, [], #{reason => <<"Chain too short">>}}
+    end;
+
+handle_request('GetBlockByHash', Req, _Context) ->
+    case dsdc_base58c:safe_decode(block_hash, maps:get('hash', Req)) of
+        {error, _} ->
+            {400, [], #{reason => <<"Invalid hash">>}};
+        {ok, Hash} ->
+            get_block(fun() -> dsdhttp_logic:get_block_by_hash(Hash) end, Req, json)
+    end;
+
+handle_request('GetBlockByHashDeprecated' = _Method, Req, _Context) ->
+    case dsdc_base58c:safe_decode(block_hash, maps:get('hash', Req)) of
+        {error, _} ->
+            {400, [], #{reason => <<"Invalid hash">>}};
+        {ok, Hash} ->
+            case dsdhttp_logic:get_block_by_hash(Hash) of
+                {ok, Block} ->
+                    {200, [], dsdhttp_api_parser:encode(block, Block)};
+                {error, block_not_found} ->
+                    {404, [], #{reason => <<"Block not found">>}}
+            end
+    end;
+
+handle_request('GetHeaderByHash', Req, _Context) ->
+    case dsdc_base58c:safe_decode(block_hash, maps:get('hash', Req)) of
+        {error, _} ->
+            {400, [], #{reason => <<"Invalid hash">>}};
+        {ok, Hash} ->
+            case dsdhttp_logic:get_header_by_hash(Hash) of
+                {ok, Header} ->
+                    {200, [], dsdhttp_api_parser:encode(header, Header)};
+                {error, header_not_found} ->
+                    {404, [], #{reason => <<"Header not found">>}}
+            end
+    end;
+
+handle_request('GetHeaderByHeight', Req, _Context) ->
+    Height = maps:get('height', Req),
+    case dsdhttp_logic:get_header_by_height(Height) of
+        {ok, H} ->
+            Resp = dsdhttp_api_parser:encode(header, H),
+            lager:debug("Resp = ~p", [pp(Resp)]),
+            {200, [], Resp};
+        {error, chain_too_short} ->
+            {400, [], #{reason => <<"Chain too short">>}}
+    end;
+
+handle_request('GetTxs', _Req, _Context) ->
+    {ok, Txs0} = dsdc_tx_pool:peek(infinity),
+    lager:debug("GetTxs : ~p", [pp(Txs0)]),
+    Txs = [dsdhttp_api_parser:encode(tx, T) || T <- Txs0],
+    {200, [], Txs};
+
+handle_request('PostBlock', Req, _Context) ->
+    case dsdhttp_api_parser:decode(block, maps:get('Block', Req)) of
+        {error, Reason} ->
+            lager:info("Post block failed: ~p", [Reason]),
+            {400, [], #{reason => <<"Block rejected">>}};
+        {ok, Block} ->
+            %% Only for logging
+            Header = dsdc_blocks:to_header(Block),
+            {ok, HH} = dsdc_headers:hash_header(Header),
+            lager:debug("'PostBlock'; header hash: ~p", [HH]),
+            case dsdc_conductor:post_block(Block) of
+                ok -> {200, [], #{}};
+                {error, Reason} ->
+                    lager:info("Post block failed: ~p", [Reason]),
+                    {400, [], #{reason => <<"Block rejected">>}}
+            end
+    end;
+
+handle_request('PostTx', #{'Tx' := Tx} = Req, _Context) ->
+    lager:debug("Got PostTx; Req = ~p", [pp(Req)]),
+    case dsdhttp_api_parser:decode(tx, maps:get(<<"tx">>, Tx)) of
+        {error, #{<<"tx">> := broken_tx}} ->
+            {400, [], #{reason => <<"Invalid tx">>}};
+        {error, _} ->
+            {400, [], #{reason => <<"Invalid base58Check encoding">>}};
+        {ok, SignedTx} ->
+            lager:debug("deserialized: ~p", [pp(SignedTx)]),
+            PushRes = dsdc_tx_pool:push(SignedTx, tx_received),
+            lager:debug("PushRes = ~p", [pp(PushRes)]),
+            Hash = dsdtx_sign:hash(SignedTx),
+            {200, [], #{<<"tx_hash">> => dsdc_base58c:encode(tx_hash, Hash)}}
+    end;
+
+handle_request('PostContractCreate', #{'ContractCreateData' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([owner, code, vm_version, deposit,
+                                       amount, gas, gas_price, fee, ttl,
+                                       call_data]),
+                 base58_decode([{owner, owner, account_pubkey}]),
+                 get_nonce(owner),
+                 hexstrings_decode([code, call_data]),
+                 ok_response(
+                    fun(Data) ->
+                        {ok, Tx} = dsdct_create_tx:new(Data),
+                        #{owner := Owner, nonce := Nonce} = Data,
+                        ContractPubKey =
+                            dsdct_contracts:compute_contract_pubkey(Owner, Nonce),
+                        #{tx => dsdc_base58c:encode(transaction,
+                                                  dsdtx:serialize_to_binary(Tx)),
+                          contract_address =>
+                              dsdc_base58c:encode(contract_pubkey, ContractPubKey)
+                         }
+                    end)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostContractCall', #{'ContractCallData' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([caller, contract, vm_version,
+                                       amount, gas, gas_price, fee, ttl,
+                                       call_data]),
+                 base58_decode([{caller, caller, account_pubkey},
+                                {contract, contract, contract_pubkey}]),
+                 get_nonce(caller),
+                 get_contract_code(contract, contract_code),
+                 hexstrings_decode([call_data]),
+                 unsigned_tx_response(fun dsdct_call_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostContractCallCompute', #{'ContractCallCompute' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([caller, contract, vm_version,
+                                       amount, gas, gas_price, fee, ttl,
+                                       function, arguments]),
+                 base58_decode([{caller, caller, account_pubkey},
+                                {contract, contract, contract_pubkey}]),
+                 get_nonce(caller),
+                 get_contract_code(contract, contract_code),
+                 compute_contract_call_data(),
+                 unsigned_tx_response(fun dsdct_call_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostOracleRegister', #{'OracleRegisterTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([account, {query_format, query_spec},
+                                       {response_format, response_spec},
+                                       query_fee, oracle_ttl, fee, ttl]),
+                 base58_decode([{account, account, account_pubkey}]),
+                 get_nonce(account),
+                 ttl_decode(oracle_ttl),
+                 unsigned_tx_response(fun dsdo_register_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostOracleExtend', #{'OracleExtendTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([oracle, oracle_ttl, fee, ttl]),
+                 base58_decode([{oracle, oracle, oracle_pubkey}]),
+                 get_nonce(oracle),
+                 ttl_decode(oracle_ttl),
+                 unsigned_tx_response(fun dsdo_extend_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostOracleQuery', #{'OracleQueryTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([sender, oracle_pubkey, query,
+                                       query_fee, fee, query_ttl, response_ttl, ttl]),
+                 base58_decode([{sender, sender, account_pubkey},
+                               {oracle_pubkey, oracle, oracle_pubkey}]),
+                 get_nonce(sender),
+                 ttl_decode(query_ttl),
+                 relative_ttl_decode(response_ttl),
+                 verify_oracle_existence(oracle),
+                 unsigned_tx_response(fun dsdo_query_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostOracleResponse', #{'OracleResponseTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([oracle, query_id, response, fee, ttl]),
+                 base58_decode([{oracle, oracle, oracle_pubkey},
+                               {query_id, query_id, oracle_query_id}]),
+                 get_nonce(oracle),
+                 verify_oracle_query_existence(oracle, query_id),
+                 unsigned_tx_response(fun dsdo_response_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostNamePreclaim', #{'NamePreclaimTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([account, commitment, fee, ttl]),
+                 base58_decode([{account, account, account_pubkey},
+                                {commitment, commitment, commitment}]),
+                 get_nonce(account),
+                 unsigned_tx_response(fun dsdns_preclaim_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostNameClaim', #{'NameClaimTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([account, name, name_salt, fee, ttl]),
+                 base58_decode([{account, account, account_pubkey},
+                                {name, name, name}]),
+                 get_nonce(account),
+                 verify_name(name),
+                 unsigned_tx_response(fun dsdns_claim_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostNameUpdate', #{'NameUpdateTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([account, name_hash, name_ttl,
+                                       pointers, client_ttl, fee, ttl]),
+                 base58_decode([{account, account, account_pubkey},
+                                {name_hash, name_hash, name}]),
+                 nameservice_pointers_decode(pointers),
+                 get_nonce(account),
+                 unsigned_tx_response(fun dsdns_update_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostNameTransfer', #{'NameTransferTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([account, name_hash, recipient_pubkey,
+                                       fee, ttl]),
+                 base58_decode([{account, account, account_pubkey},
+                                {recipient_pubkey, recipient_account, account_pubkey},
+                                {name_hash, name_hash, name}]),
+                 get_nonce(account),
+                 unsigned_tx_response(fun dsdns_transfer_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostNameRevoke', #{'NameRevokeTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([account, name_hash, fee, ttl]),
+                 base58_decode([{account, account, account_pubkey},
+                                {name_hash, name_hash, name}]),
+                 get_nonce(account),
+                 unsigned_tx_response(fun dsdns_revoke_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostSpend', #{'SpendTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([sender,
+                                       {recipient_pubkey, recipient},
+                                       amount, fee, ttl, payload]),
+                 base58_decode([{sender, sender, account_pubkey},
+                                {recipient, recipient, account_pubkey}]),
+                 get_nonce(sender),
+                 unsigned_tx_response(fun dsdc_spend_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostChannelCreate', #{'ChannelCreateTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([initiator, initiator_amount,
+                                       responder, responder_amount,
+                                       push_amount, channel_reserve,
+                                       lock_period, ttl, fee]),
+                 base58_decode([{initiator, initiator, account_pubkey},
+                                {responder, responder, account_pubkey}]),
+                 get_nonce(initiator),
+                 unsigned_tx_response(fun dsdsc_create_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostChannelDeposit', #{'ChannelDepositTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([channel_id, from,
+                                       amount,
+                                       ttl, fee, nonce]),
+                 base58_decode([{channel_id, channel_id, channel},
+                                {from, from, account_pubkey}]),
+                 unsigned_tx_response(fun dsdsc_deposit_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostChannelWithdrawal', #{'ChannelWithdrawalTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([channel_id, to,
+                                       amount,
+                                       ttl, fee, nonce]),
+                 base58_decode([{channel_id, channel_id, channel},
+                                {to, to, account_pubkey}]),
+                 unsigned_tx_response(fun dsdsc_withdraw_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostChannelCloseMutual', #{'ChannelCloseMutualTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([channel_id,
+                                       initiator_amount, responder_amount,
+                                       ttl,
+                                       fee, nonce]),
+                 base58_decode([{channel_id, channel_id, channel}]),
+                 unsigned_tx_response(fun dsdsc_close_mutual_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostChannelCloseSolo', #{'ChannelCloseSoloTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([channel_id, from,
+                                       payload,
+                                       ttl, fee]),
+                 base58_decode([{channel_id, channel_id, channel},
+                                {from, from, account_pubkey}]),
+                 get_nonce(from),
+                 unsigned_tx_response(fun dsdsc_close_solo_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostChannelSlash', #{'ChannelSlashTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([channel_id, from,
+                                       payload,
+                                       ttl, fee]),
+                 base58_decode([{channel_id, channel_id, channel},
+                                {from, from, account_pubkey}]),
+                 get_nonce(from),
+                 unsigned_tx_response(fun dsdsc_slash_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('PostChannelSettle', #{'ChannelSettleTx' := Req}, _Context) ->
+    ParseFuns = [parse_map_to_atom_keys(),
+                 read_required_params([channel_id, from,
+                                       initiator_amount, responder_amount,
+                                       ttl, fee, nonce]),
+                 base58_decode([{channel_id, channel_id, channel},
+                                {from, from, account_pubkey}]),
+                 unsigned_tx_response(fun dsdsc_settle_tx:new/1)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('GetAccountBalance', Req, _Context) ->
+    case dsdc_base58c:safe_decode(account_pubkey, maps:get('account_pubkey', Req)) of
+        {ok, AccountPubkey} ->
+            case get_block_hash_optionally_by_hash_or_height(Req) of
+                {error, not_found} ->
+                    {404, [], #{reason => <<"Block not found">>}};
+                {error, invalid_hash} ->
+                    {400, [], #{reason => <<"Invalid block hash">>}};
+                {error, blocks_mismatch} ->
+                    {400, [], #{reason => <<"Invalid height and hash combination">>}};
+                {ok, Hash} ->
+                      case dsdhttp_logic:get_account_balance_at_hash(AccountPubkey, Hash) of
+                          {error, account_not_found} ->
+                              {404, [], #{reason => <<"Account not found">>}};
+                          {error, not_on_main_chain} ->
+                              {400, [], #{reason => <<"Block not on the main chain">>}};
+                          {ok, Balance} ->
+                              {200, [], #{balance => Balance}}
+                      end
+            end;
+        _ ->
+            {400, [], #{reason => <<"Invalid account hash">>}}
+    end;
+
+handle_request('GetCommitmentHash', Req, _Context) ->
+    Name         = maps:get('name', Req),
+    Salt         = maps:get('salt', Req),
+    case dsdns:get_commitment_hash(Name, Salt) of
+        {ok, CHash} ->
+            EncodedCHash = dsdc_base58c:encode(commitment, CHash),
+            {200, [], #{commitment => EncodedCHash}};
+        {error, Reason} ->
+            ReasonBin = atom_to_binary(Reason, utf8),
+            {400, [], #{reason => <<"Name validation failed with a reason: ", ReasonBin/binary>>}}
+    end;
+
+handle_request('GetContractCallFromTx', Req, _Context) ->
+    ParseFuns = [read_required_params([tx_hash]),
+                 base58_decode([{tx_hash, tx_hash, tx_hash}]),
+                 get_transaction(tx_hash, tx),
+                 get_contract_call_object_from_tx(tx, contract_call),
+                 ok_response(
+                    fun(#{contract_call := Call}) ->
+                            dsdct_call:serialize_for_client(Call)
+                    end)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('GetName', Req, _Context) ->
+    Name = maps:get('name', Req),
+    case dsdc_chain:name_entry(Name) of
+        {ok, NameEntry} ->
+            #{<<"name">>     := Name,
+              <<"hash">>     := Hash,
+              <<"name_ttl">> := NameTTL,
+              <<"pointers">> := Pointers} = NameEntry,
+            {200, [], #{name      => Name,
+                        name_hash => dsdc_base58c:encode(name, Hash),
+                        name_ttl  => NameTTL,
+                        pointers  => Pointers}};
+        {error, name_not_found} ->
+            {404, [], #{reason => <<"Name not found">>}};
+        {error, name_revoked} ->
+            {404, [], #{reason => <<"Name revoked">>}};
+        {error, Reason} ->
+            ReasonBin = atom_to_binary(Reason, utf8),
+            {400, [], #{reason => <<"Name validation failed with a reason: ", ReasonBin/binary>>}}
+    end;
+
+handle_request('GetAccountsBalances', _Req, _Context) ->
+    case dsdu_env:user_config_or_env([<<"http">>, <<"debug">>],
+                                    dsdhttp, enable_debug_endpoints, false) of
+        true ->
+            {ok, AccountsBalances} = dsdhttp_logic:get_all_accounts_balances(),
+            {200, [], #{accounts_balances =>
+                        dsdhttp_api_parser:encode(account_balances,
+                                                 AccountsBalances)}};
+        false ->
+            {403, [], #{reason => <<"Balances not enabled">>}}
+    end;
+
+handle_request('GetAccountTransactions', Req, _Context) ->
+    case dsdc_base58c:safe_decode(account_pubkey, maps:get('account_pubkey', Req)) of
+        {ok, AccountPubkey} ->
+            case get_account_transactions(AccountPubkey, Req) of
+                {error, unknown_type} ->
+                    {400, [], #{reason => <<"Unknown transaction type">>}};
+                {ok, HeaderTxs} ->
+                    case encode_txs(HeaderTxs, Req) of
+                        {error, Err} ->
+                            Err;
+                        {ok, EncodedTxs, DataSchema} ->
+                            {200, [], #{transactions => EncodedTxs,
+                                        data_schema => DataSchema}}
+                    end
+            end;
+        _ ->
+            {400, [], #{reason => <<"Invalid account hash">>}}
+    end;
+
+handle_request('GetVersion', _Req, _Context) ->
+    {ok, Version} = dsdhttp_logic:version(),
+    {ok, Revision} = dsdhttp_logic:revision(),
+    {ok, GenHash} = dsdhttp_logic:get_genesis_hash(),
+    Resp = #{<<"version">> => Version,
+             <<"revision">> => Revision,
+             <<"genesis_hash">> => GenHash},
+    {200, [], dsdhttp_api_parser:encode(node_version, Resp)};
+
+handle_request('GetInfo', _Req, _Context) ->
+    case dsdu_env:user_config_or_env([<<"http">>, <<"debug">>],
+                                    dsdhttp, enable_debug_endpoints, false) of
+        true ->
+            {ok, TimeSummary} = dsdhttp_logic:get_top_blocks_time_summary(30),
+            {200, [], #{last_30_blocks_time => TimeSummary}};
+        false ->
+            {403, [], #{reason => <<"Info not enabled">>}}
+    end;
+
+handle_request('CompileContract', Req, _Context) ->
+    case Req of
+        #{'Contract' :=
+              #{ <<"code">> := Code
+               , <<"options">> := Options }} ->
+            %% TODO: Handle other languages
+            case dsdhttp_logic:contract_compile(Code, Options) of
+                 {ok, ByteCode} ->
+                     {200, [], #{ bytecode => ByteCode}};
+                 {error, ErrorMsg} ->
+                     {403, [], #{reason => ErrorMsg}}
+             end;
+        _ -> {403, [], #{reason => <<"Bad request">>}}
+    end;
+
+handle_request('CallContract', Req, _Context) ->
+    case Req of
+        #{'ContractCallInput' :=
+              #{ <<"abi">> := ABI
+               , <<"code">> := Code
+               , <<"function">> := Function
+               , <<"arg">> := Argument }}  ->
+            case dsdhttp_logic:contract_call(ABI, Code, Function, Argument) of
+                {ok, Result} ->
+                    {200, [], #{ out => Result}};
+                {error, ErrorMsg} ->
+                    {403, [], #{reason => ErrorMsg}}
+            end;
+        _ -> {403, [], #{reason => <<"Bad request">>}}
+    end;
+
+handle_request('EncodeCalldata', Req, _Context) ->
+    case Req of
+        #{'ContractCallInput' :=
+              #{ <<"abi">>  := ABI
+	       , <<"code">> := Code
+               , <<"function">> := Function
+               , <<"arg">> := Argument }} ->
+            %% TODO: Handle other languages
+            case dsdhttp_logic:contract_encode_call_data(ABI, Code, Function, Argument) of
+                {ok, Result} ->
+                    {200, [], #{ calldata => Result}};
+                {error, ErrorMsg} ->
+                    {403, [], #{reason => ErrorMsg}}
+            end;
+        _ -> {403, [], #{reason => <<"Bad request">>}}
+    end;
+
+handle_request('GetTx', Req, _Context) ->
+    ParseFuns = [read_required_params([tx_hash]),
+                 read_optional_params([{tx_encoding, tx_encoding, message_pack}]),
+                 parse_tx_encoding(tx_encoding),
+                 base58_decode([{tx_hash, tx_hash, tx_hash}]),
+                 get_transaction(tx_hash, tx),
+                 encode_transaction(tx, tx_encoding, encoded_tx),
+                 ok_response(
+                    fun(#{encoded_tx := #{tx := Tx, schema := Schema}}) ->
+                        #{transaction => Tx,
+                          data_schema => Schema}
+                    end)
+                ],
+    process_request(ParseFuns, Req);
+
+handle_request('GetPeerKey', _Req, _Context) ->
+    case dsdhttp_logic:peer_pubkey() of
+        {ok, PeerKey} ->
+            {200, [], #{pub_key => dsdc_base58c:encode(peer_pubkey, PeerKey)}};
+        {error, key_not_found} ->
+            {404, [], #{reason => <<"Keys not configured">>}}
+    end;
+
+handle_request(OperationID, Req, Context) ->
+    error_logger:error_msg(
+      ">>> Got not implemented request to process: ~p~n",
+      [{OperationID, Req, Context}]
+     ),
+    {501, [], #{}}.
+
+encode_txs(HeaderTxs, Req) ->
+    case read_tx_encoding_param(Req) of
+        {error, _} = Err ->
+            Err;
+        {ok, TxEncoding} ->
+            DataSchema =
+                case TxEncoding of
+                    json ->
+                        <<"JSONTxs">>;
+                    message_pack ->
+                        <<"MsgPackTxs">>
+                end,
+            EncodedTxs =
+                lists:map(
+                    fun({mempool, Tx}) ->
+                        dsdtx_sign:serialize_for_client_pending(TxEncoding, Tx);
+                    ({BlockHeader, Tx}) ->
+                        dsdtx_sign:serialize_for_client(TxEncoding,
+                                                       BlockHeader, Tx)
+                    end,
+                    HeaderTxs),
+            {ok, EncodedTxs, DataSchema}
+    end.
+
+get_account_transactions(Account, Req) ->
+    case {parse_filter_param(tx_types, Req),
+          parse_filter_param(exclude_tx_types, Req)} of
+        {{error, unknown_type} = Err, _} ->
+            Err;
+        {_, {error, unknown_type} = Err} ->
+            Err;
+        {{ok, KeepTxTypes}, {ok, DropTxTypes}} ->
+            ShowPending = read_optional_param(pending, Req, true),
+            FilteredTxs = get_txs_and_headers(KeepTxTypes,
+                                              DropTxTypes,
+                                              ShowPending,
+                                              Account),
+            Res =
+              lists:sort(
+                  fun({mempool, SignedTxA}, {mempool, SignedTxB}) ->
+                      TxA = dsdtx_sign:tx(SignedTxA),
+                      TxB = dsdtx_sign:tx(SignedTxB),
+                      {dsdtx:origin(TxA), dsdtx:nonce(TxA), TxA} >=
+                      {dsdtx:origin(TxB), dsdtx:nonce(TxB), TxB};
+                     ({mempool, _}, {_, _}) -> true;
+                     ({_, _}, {mempool, _}) -> false;
+                     ({HeaderA, SignedTxA}, {HeaderB, SignedTxB}) ->
+                      HeightA = dsdc_headers:height(HeaderA),
+                      HeightB = dsdc_headers:height(HeaderB),
+                      TxA = dsdtx_sign:tx(SignedTxA),
+                      TxB = dsdtx_sign:tx(SignedTxB),
+                      {HeightA, dsdtx:origin(TxA), dsdtx:nonce(TxA), TxA} >=
+                      {HeightB, dsdtx:origin(TxB), dsdtx:nonce(TxB), TxB}
+                  end,
+                  FilteredTxs),
+            {ok, offset_and_limit(Req, Res)}
+      end.
+
+get_txs_and_headers(KeepTxTypes, DropTxTypes, ShowPending, Account) ->
+    Filter =
+        fun(SignedTx) ->
+              Tx = dsdtx_sign:tx(SignedTx),
+              TxType = dsdtx:tx_type(Tx),
+              Drop = lists:member(TxType, DropTxTypes),
+              Keep = KeepTxTypes =:= []
+                  orelse lists:member(TxType, KeepTxTypes),
+              Keep andalso not Drop
+        end,
+    Fun =
+        fun() ->
+                Txs = dsdc_db:transactions_by_account(Account, Filter,
+                                                     ShowPending),
+                lists:filtermap(
+                  fun({TxHash, STx}) ->
+                          case dsdc_chain:find_tx_location(TxHash) of
+                              none -> false;
+                              mempool -> {true, {mempool, STx}};
+                              BlockHash ->
+                                  {ok, H} = dsdc_chain:get_header(BlockHash),
+                                  {true, {H, STx}}
+                          end
+                  end, Txs)
+        end,
+    %% Put this in a transaction to avoid multiple transaction and to
+    %% get a snapshot of the chain state.
+    dsdc_db:ensure_transaction(Fun).
+
+offset_and_limit(Req, ResultList) ->
+    Limit = read_optional_param(limit, Req, 20),
+    Offset = read_optional_param(offset, Req, 0) + 1, % lists are 1-indexed
+    Sublist =
+        fun Sub([], _, _, _, Accum) -> Accum;
+            Sub(_, _, _, LeftToTake, Accum) when LeftToTake =< 0 -> Accum;
+            Sub([H | T], Idx, StartIdx, LeftToTake, Accum) ->
+                case Idx >= StartIdx of
+                    true -> Sub(T, Idx + 1, StartIdx, LeftToTake - 1, [H | Accum]);
+                    false -> Sub(T, Idx + 1, StartIdx, LeftToTake, Accum)
+                end
+        end,
+    lists:reverse(Sublist(ResultList, 1, Offset, Limit, [])).
+
+-spec get_block_hash_optionally_by_hash_or_height(map()) ->
+    {ok, binary()} | {error, not_found | invalid_hash | blocks_mismatch}.
+get_block_hash_optionally_by_hash_or_height(Req) ->
+    GetHashByHeight =
+        fun(Height) ->
+            case dsdhttp_logic:get_header_by_height(Height) of
+                {error, chain_too_short} ->
+                    {error, not_found};
+                {ok, Header} ->
+                    {ok, _Hash} = dsdc_headers:hash_header(Header)
+            end
+        end,
+    case {maps:get('height', Req), maps:get('hash', Req)} of
+        {undefined, undefined} ->
+            {ok, _} = dsdhttp_logic:get_top_hash();
+        {undefined, EncodedHash} ->
+            case dsdc_base58c:safe_decode(block_hash, EncodedHash) of
+                {error, _} ->
+                    {error, invalid_hash};
+                {ok, Hash} ->
+                    case dsdc_chain:has_block(Hash) of
+                        false ->
+                            {error, not_found};
+                        true ->
+                            {ok, Hash}
+                    end
+            end;
+        {Height, undefined} ->
+            GetHashByHeight(Height);
+        {Height, EncodedHash} ->
+            case GetHashByHeight(Height) of
+                {error, _} = Err ->
+                    Err;
+                {ok, Hash} -> % ensure it is the same hash
+                    case dsdc_base58c:safe_decode(block_hash, EncodedHash) of
+                        {error, _} ->
+                            {error, invalid_hash};
+                        {ok, Hash} -> % same hash
+                            {ok, Hash};
+                        {ok, _OtherHash} ->
+                            {error, blocks_mismatch}
+                    end
+            end
+    end.

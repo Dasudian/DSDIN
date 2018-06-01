@@ -1,0 +1,18 @@
+{application, dsdsophia,
+ [{description, "Contract Language for DSDIN"},
+  {vsn, "0.0.1"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib,
+    lager,
+    dsdbytecode
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.
+

@@ -1,0 +1,397 @@
+{
+    "$schema" : "http://json-schema.org/draft-04/schema#",
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : {
+        "peers" : {
+            "description" :
+            "Pre-configured addresses of dsdin nodes to contact. If not set TestNet seed peers will be used.",
+            "type"  : "array",
+            "items" : {
+                "type" : "string",
+                "description" : "Aeternity Node address",
+                "example" : "aenode://pp$ySU7cHqsymnuBP9iSe4rMnH1Rz2FStx5rnoewYMJcuPhdaqPk@192.168.1.1:3015",
+                "pattern": "^aenode://pp\$[a-zA-Z0-9]+@[^:\\.\"!#$%^&*()',/]+(\\.[^:\\.\"!#$%^&*()',/]+)*:[0-9]+/*$"
+            }
+        },
+        "blocked_peers" : {
+            "description" :
+            "Pre-configured addresses of dsdin nodes NOT to contact",
+            "type"  : "array",
+            "items" : {
+                "type" : "string",
+                "description" : "Aeternity Node address",
+                "example" : "aenode://pp$ySU7cHqsymnuBP9iSe4rMnH1Rz2FStx5rnoewYMJcuPhdaqPk@192.168.1.1:3015",
+                "pattern": "^aenode://pp\$[a-zA-Z0-9]+@[^:\\.\"!#$%^&*()',/]+(\\.[^:\\.\"!#$%^&*()',/]+)*:[0-9]+/*$"
+            }
+        },
+        "sync" : {
+            "type" : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "listen_address": {
+                          "description": "Listen address for external interface. This should be publicly accessible",
+                          "type": "string",
+                          "example": "0.0.0.0"
+                        },
+                "port" : {
+                    "description" : "Port used for (incoming) sync connections, must be reachable from the public facing IP",
+                    "type" : "integer"
+                },
+
+                "ping_interval" : {
+                    "description" : "Interval between pings (in ms)",
+                    "type" : "integer"
+                },
+                "external_port" : {
+                    "description" :
+                    "Listen port for external sync connections.",
+                    "type" : "integer"
+                },
+                "acceptors" : {
+                    "description" : "Number of acceptors in listening pool",
+                    "type" : "integer",
+                    "default": 10,
+                },
+                "max_connections" : {
+                    "description" : "The maximum number of incoming connections",
+                    "type" : "integer",
+                    "default": 1000,
+                },
+                "connect_timeout" : {
+                    "description" : "Connection timeout in miliseconds",
+                    "type" : "integer",
+                    "default": 1000,
+                },
+                "first_ping_timeout" : {
+                    "description" : "Maximum time for receiving a ping in miliseconds",
+                    "type" : "integer",
+                    "default": 30000,
+                },
+                "noise_hs_timeout" : {
+                    "description" : "Maximum time for noise handshake in miliseconds",
+                    "type" : "integer",
+                    "default": 5000,
+                }
+
+            }
+        },
+        "http" : {
+            "type" : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "external" : {
+                    "type" : "object",
+                    "additionalProperties" : false,
+                    "properties" : {
+                        "listen_address": {
+                          "description": "Listen address for external interface. This should be publicly accessible",
+                          "type": "string",
+                          "example": "0.0.0.0"
+                        },
+                        "port" : {
+                            "description" :
+                            "Listen port for external HTTP interface.",
+                            "type" : "integer"
+                        },
+                        "request_timeout" : {
+                            "description" : "HTTP Request timeout.",
+                            "type" : "integer"
+                        },
+                        "connect_timeout" : {
+                            "description" : "HTTP Request connect timeout.",
+                            "type" : "integer"
+                        },
+                        "acceptors" : {
+                            "description" : "Number of acceptors in external pool",
+                            "type" : "integer"
+                        }
+                    }
+                },
+                "internal" : {
+                    "type" : "object",
+                    "additionalProperties" : false,
+                    "properties" : {
+                        "listen_address": {
+                          "description": "Listen address for internal interface. This should not be publicly accessible",
+                          "type": "string",
+                          "example": "127.0.0.1"
+                        },
+                        "port" : {
+                            "description" :
+                            "Listen port for internal HTTP interface.",
+                            "type" : "integer"
+                        },
+                        "acceptors" : {
+                            "description" : "Number of acceptors in internal pool",
+                            "type" : "integer"
+                        }
+                    }
+                },
+                "endpoints" : {
+                    "gossip" : {
+                        "description" : "Gossip protocol API",
+                        "type" : "boolean"
+                    },
+                    "name_service" : {
+                        "description" : "Name resolution API",
+                        "type" : "boolean"
+                    },
+                    "chain" : {
+                        "description" : "Chain state inspection endpoints",
+                        "type" : "boolean"
+                    },
+                    "transactions" : {
+                        "description" : "Transactions insection endpoints",
+                        "type" : "boolean"
+                    },
+                    "node_operator" : {
+                        "description" : "Node operator endpoints",
+                        "type" : "boolean"
+                    },
+                    "dev" : {
+                        "description" : "Development only API - for validation of client implementations. Should not be used in real life scenrios",
+                        "type" : "boolean"
+                    },
+                    "debug" : {
+                        "description" : "Debug endpoints",
+                        "type" : "boolean"
+                    },
+                    "obsolete" : {
+                        "description" : "Old endpoints that will be removed",
+                        "type" : "boolean"
+                    }
+                },
+                "debug" : {
+                    "description" : "Whether to enable the debug endpoints",
+                    "type" : "boolean"
+                }
+            }
+        },
+        "websocket" : {
+            "type" : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "internal" : {
+                    "type" : "object",
+                    "additionalProperties" : false,
+                    "properties" : {
+                        "port" : {
+                            "description" :
+                            "Listen port for websocket interface.",
+                            "type" : "integer"
+                        },
+                        "listen_address": {
+                          "description": "Listen address for websocket interface.",
+                          "type": "string",
+                          "example": "192.168.168.25"
+                        },
+                        "acceptors" : {
+                            "description" : "Number of acceptors in pool",
+                            "type" : "integer"
+                        }
+                    }
+                },
+                "channel" : {
+                    "type" : "object",
+                    "additionalProperties" : false,
+                    "properties" : {
+                        "port" : {
+                            "description" :
+                            "Listen port for channels websocket interface.",
+                            "type" : "integer"
+                        },
+                        "listen_address": {
+                          "description": "Listen address for channels websocket interface.",
+                          "type": "string",
+                          "example": "192.168.168.25"
+                        },
+                        "acceptors" : {
+                            "description" : "Number of acceptors in pool",
+                            "type" : "integer"
+                        }
+                    }
+                }
+            }
+        },
+        "keys" : {
+            "type" : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "dir"      : {
+                    "description" :
+                    "Location (directory) of the public/private key pair(s)",
+                    "type" : "string"
+                },
+                "password" : {
+                    "description" :
+                    "Password used to encrypt the key-pair files",
+                    "type" : "string"
+                },
+                "peer_password" : {
+                    "description" :
+                    "Password used to encrypt the peer key-pair files - if left blank `password` will be used",
+                    "type" : "string"
+                }
+            }
+        },
+        "chain" : {
+            "type" : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "persist" : {
+                    "description" :
+                    "If true, all changes to the chain are written to disk.",
+                    "type" : "boolean" },
+                "db_path"   : {
+                    "description" :
+                    "The directory where the chain is persisted to disk.",
+                    "type" : "string"
+                },
+                "hard_forks" : {
+                    "description" : "The consensus protocol versions with respective effective heights",
+                    "type" : "object",
+                    "additionalProperties" : false,
+                    "patternProperties" : {
+                        "^[1-9][0-9]*$": {
+                            "description" : "Minimum height at which protocol is effective",
+                            "type" : "integer",
+                            "minimum" : 0
+                        }
+                    }
+                }
+            }
+        },
+        "mining" : {
+            "type" : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "autostart" : {
+                    "description" :
+                    "If true, the node will start mining automatically.",
+                    "type" : "boolean"
+                },
+                "attempt_timeout" : {
+                    "description" :
+                    "Maximum time (milliseconds) for each attempt to mine a block with a specific nonce.",
+                    "type" : "integer"
+                },
+                "expected_mine_rate" : {
+                    "description" : "Expected mine rate (milliseconds) between blocks. Used in governance.",
+                    "type" : "integer",
+                    "default": 300000,
+                    "minimum" : 1
+                },
+                "cuckoo" : {
+                    "type" : "object",
+                    "additionalProperties" : false,
+                    "properties" : {
+                        "miner" : {
+                            "type" : "object",
+                            "additionalProperties" : false,
+                            "required" : [
+                                "executable",
+                                "extra_args",
+                                "node_bits"
+                            ],
+                            "properties" : {
+                                "executable" : {
+                                    "description" : "Executable binary of the miner. Options are: \"mean28s-generic\" (memory-intensive), \"mean28s-avx2\" (memory-intensive, benefits from faster CPU supporting AVX2 instructions), \"lean28\" (CPU-intensive, useful if memory-constrained).",
+                                    "type" : "string",
+                                    "default": "mean28s-generic"
+                                },
+                                "extra_args" : {
+                                    "description" : "Extra arguments to pass to the miner executable binary. The safest choice is specifying no arguments i.e. empty string.",
+                                    "type" : "string",
+                                    "default": "-t 5"
+                                },
+                                "node_bits" : {
+                                    "description" : "Number of bits used for representing a node in the Cuckoo Cycle problem. It affects both PoW generation (mining) and verification. WARNING: Changing this makes the node incompatible with the chain of other nodes in the network, do not change from the default unless you know what you are doing.",
+                                    "type": "integer",
+                                    "default": 28
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "logging" : {
+            "type"    : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "hwm"     : {
+                    "description" :
+                    "Controls the overload protection in the logs. Default=50.",
+                    "type" : "integer",
+                    "minimum" : 50 },
+                "level"   : {
+                    "description" :
+                    "Sets the level of logging in the dsdin, mining and cuckoo logs.",
+                    "type": "string",
+                    "enum" : [ "debug", "info", "warning", "error", "none" ],
+                    "default": "debug"
+                }
+            }
+        },
+        "metrics" : {
+            "type" : "object",
+            "additionalProperties" : false,
+            "properties" : {
+                "host" : {
+                    "description" :
+                    "Hostname to use when reporting to the statsd daemon",
+                    "type" : "string"
+                },
+                "port" : {
+                    "description" :
+                    "Port number of the (typically) statsd daemon.",
+                    "type" : "integer",
+                    "minimum" : 0
+                },
+                "reconnect_interval" : {
+                    "description" :
+                    "How often (in ms) to try reconnecting to the daemon",
+                    "type" : "integer",
+                    "minimum" : 0
+                },
+                "rules" : {
+                    "description" :
+                    "Filter rules guiding logging/sending of metrics. The provided search patterns are applied to existing metrics, and the related 'actions' control whether to 'log' the metric data to disk, 'send' it to the cloud, or neither. The default is to do both, i.e. 'log,send' for all 'ae.dsdin.**' metrics.",
+                    "type" : "array",
+                    "items" : {
+                        "type" : "object",
+                        "additionalProperties" : false,
+                        "properties" : {
+                            "name" : {
+                                "description" :
+                                "Name pattern for metric (incl wildcards)",
+                                "type" : "string",
+                                "pattern" : "^([a-zA-Z0-9\\-_]+|\\*{1,2})(\\.([a-zA-Z0-9\\-_]+|\\*{1,2}))*$",
+                                "example" : "ae.dsdin.aecore.**"
+                            },
+                            "type" : {
+                                "description" :
+                                "type of metric",
+                                "type" : "string",
+                                "pattern" : "^(\\*|[a-zA-Z]*)$"
+                            },
+                            "datapoints" : {
+                                "type" : "string",
+                                "description" :
+                                "Specific datapoints: 'default', or names, comma-separated",
+                                "pattern" : "^[a-zA-Z0-9]+(\\,[a-zA-Z0-9]+)*$"
+                            },
+                            "actions" : {
+                                "description" :
+                                "What to do with matching metrics.",
+                                "type" : "string",
+                                "pattern" : "^((none)|(((log)|(send))(\\,((log)|(send))){0,1}))$"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,17 @@
+{application, dsdcontract,
+ [{description, "DSDIN Contract"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib,
+    lager,
+    crypto,
+    dsdtx
+   ]},
+  {env,[]},
+  {modules, []},
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

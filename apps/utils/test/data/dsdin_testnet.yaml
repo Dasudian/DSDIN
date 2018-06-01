@@ -1,0 +1,12 @@
+---
+# Minimal configuration file to join the TestNet with enabled chain persisting and mining.
+# Should not contain default values.
+keys:
+    password: "top secret"
+    dir: ./keys
+
+chain:
+    persist: true
+
+mining:
+    autostart: true

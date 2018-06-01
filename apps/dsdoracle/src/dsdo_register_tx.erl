@@ -1,0 +1,232 @@
+
+-module(dsdo_register_tx).
+
+-include("oracle_txs.hrl").
+
+-behavior(dsdtx).
+
+%% Behavior API
+-export([new/1,
+         type/0,
+         fee/1,
+         ttl/1,
+         nonce/1,
+         origin/1,
+         check/5,
+         process/5,
+         accounts/1,
+         signers/2,
+         serialization_template/1,
+         serialize/1,
+         deserialize/2,
+         for_client/1
+        ]).
+
+%% Additional getters
+-export([account/1,
+         query_spec/1,
+         query_fee/1,
+         response_spec/1,
+         oracle_ttl/1]).
+
+-define(ORACLE_REGISTER_TX_VSN, 1).
+-define(ORACLE_REGISTER_TX_TYPE, oracle_register_tx).
+-define(ORACLE_REGISTER_TX_FEE, 4).
+
+-opaque tx() :: #oracle_register_tx{}.
+
+-export_type([tx/0]).
+
+-spec account(tx()) -> dsdc_keys:pubkey().
+account(#oracle_register_tx{account = AccountPubKey}) ->
+    AccountPubKey.
+
+-spec query_spec(tx()) -> dsdo_oracles:type_spec().
+query_spec(#oracle_register_tx{query_spec = QuerySpec}) ->
+    QuerySpec.
+
+-spec response_spec(tx()) -> dsdo_oracles:type_spec().
+response_spec(#oracle_register_tx{response_spec = ResponseSpec}) ->
+    ResponseSpec.
+
+-spec query_fee(tx()) -> integer().
+query_fee(#oracle_register_tx{query_fee = QueryFee}) ->
+    QueryFee.
+
+-spec oracle_ttl(tx()) -> dsdo_oracles:ttl().
+oracle_ttl(#oracle_register_tx{oracle_ttl = TTL}) ->
+    TTL.
+
+-spec fee(tx()) -> integer().
+fee(#oracle_register_tx{fee = Fee}) ->
+    Fee.
+
+-spec ttl(tx()) -> dsdc_blocks:height().
+ttl(#oracle_register_tx{ttl = TTL}) ->
+    TTL.
+
+-spec new(map()) -> {ok, dsdtx:tx()}.
+new(#{account       := AccountPubKey,
+      nonce         := Nonce,
+      query_spec    := QuerySpec,
+      response_spec := ResponseSpec,
+      query_fee     := QueryFee,
+      oracle_ttl    := OracleTTL,
+      fee           := Fee,
+      ttl           := TTL}) ->
+    Tx = #oracle_register_tx{account       = AccountPubKey,
+                             nonce         = Nonce,
+                             query_spec    = QuerySpec,
+                             response_spec = ResponseSpec,
+                             query_fee     = QueryFee,
+                             oracle_ttl    = OracleTTL,
+                             fee           = Fee,
+                             ttl           = TTL},
+    {ok, dsdtx:new(?MODULE, Tx)}.
+
+-spec type() -> atom().
+type() ->
+    ?ORACLE_REGISTER_TX_TYPE.
+
+-spec nonce(tx()) -> non_neg_integer().
+nonce(#oracle_register_tx{nonce = Nonce}) ->
+    Nonce.
+
+-spec origin(tx()) -> dsdc_keys:pubkey().
+origin(#oracle_register_tx{account = AccountPubKey}) ->
+    AccountPubKey.
+
+%% Account should exist, and have enough funds for the fee.
+-spec check(tx(), dsdtx:tx_context(), dsdc_trees:trees(), dsdc_blocks:height(), non_neg_integer()) ->
+        {ok, dsdc_trees:trees()} | {error, term()}.
+check(#oracle_register_tx{account = AccountPubKey, nonce = Nonce,
+                          oracle_ttl = OTTL, fee = Fee}, _Context, Trees, Height, _ConsensusVersion) ->
+    Checks =
+        [fun() -> dsdtx_utils:check_account(AccountPubKey, Trees, Nonce, Fee) end,
+         fun() -> ensure_not_oracle(AccountPubKey, Trees) end,
+         fun() -> dsdo_utils:check_ttl_fee(Height, OTTL, Fee - ?ORACLE_REGISTER_TX_FEE) end],
+
+    case dsdu_validation:run(Checks) of
+        ok              -> {ok, Trees};
+        {error, Reason} -> {error, Reason}
+    end.
+
+-spec accounts(tx()) -> [dsdc_keys:pubkey()].
+accounts(#oracle_register_tx{account = AccountPubKey}) ->
+    [AccountPubKey].
+
+-spec signers(tx(), dsdc_trees:trees()) -> {ok, [dsdc_keys:pubkey()]}.
+signers(#oracle_register_tx{account = AccountPubKey}, _) ->
+    {ok, [AccountPubKey]}.
+
+-spec process(tx(), dsdtx:tx_context(), dsdc_trees:trees(), dsdc_blocks:height(), non_neg_integer()) ->
+        {ok, dsdc_trees:trees()}.
+process(#oracle_register_tx{account = AccountPubKey,
+                            nonce   = Nonce,
+                            fee     = Fee} = RegisterTx, _Ctxt, Trees0, Height, _ConsensusVersion) ->
+    AccountsTree0 = dsdc_trees:accounts(Trees0),
+    OraclesTree0  = dsdc_trees:oracles(Trees0),
+
+    Account0 = dsdc_accounts_trees:get(AccountPubKey, AccountsTree0),
+    {ok, Account1} = dsdc_accounts:spend(Account0, Fee, Nonce),
+    AccountsTree1 = dsdc_accounts_trees:enter(Account1, AccountsTree0),
+
+    Oracle = dsdo_oracles:new(RegisterTx, Height),
+    OraclesTree1 = dsdo_state_tree:insert_oracle(Oracle, OraclesTree0),
+
+    Trees1 = dsdc_trees:set_accounts(Trees0, AccountsTree1),
+    Trees2 = dsdc_trees:set_oracles(Trees1, OraclesTree1),
+
+    {ok, Trees2}.
+
+serialize(#oracle_register_tx{account       = AccountPubKey,
+                              nonce         = Nonce,
+                              query_spec    = QuerySpec,
+                              response_spec = ResponseSpec,
+                              query_fee     = QueryFee,
+                              oracle_ttl    = {TTLType0, TTLValue},
+                              fee           = Fee,
+                              ttl           = TTL}) ->
+    TTLType = case TTLType0 of
+                  ?ttl_delta_atom -> ?ttl_delta_int;
+                  ?ttl_block_atom -> ?ttl_block_int
+              end,
+    {version(),
+    [ {account, AccountPubKey}
+    , {nonce, Nonce}
+    , {query_spec, QuerySpec}
+    , {response_spec, ResponseSpec}
+    , {query_fee, QueryFee}
+    , {ttl_type, TTLType}
+    , {ttl_value, TTLValue}
+    , {fee, Fee}
+    , {ttl, TTL}
+    ]}.
+
+deserialize(?ORACLE_REGISTER_TX_VSN,
+           [ {account, AccountPubKey}
+           , {nonce, Nonce}
+           , {query_spec, QuerySpec}
+           , {response_spec, ResponseSpec}
+           , {query_fee, QueryFee}
+           , {ttl_type, TTLType0}
+           , {ttl_value, TTLValue}
+           , {fee, Fee}
+           , {ttl, TTL}]) ->
+    TTLType = case TTLType0 of
+                  ?ttl_delta_int -> ?ttl_delta_atom;
+                  ?ttl_block_int -> ?ttl_block_atom
+              end,
+    #oracle_register_tx{account       = AccountPubKey,
+                        nonce         = Nonce,
+                        query_spec    = QuerySpec,
+                        response_spec = ResponseSpec,
+                        query_fee     = QueryFee,
+                        oracle_ttl    = {TTLType, TTLValue},
+                        fee           = Fee,
+                        ttl           = TTL}.
+
+serialization_template(?ORACLE_REGISTER_TX_VSN) ->
+    [ {account, binary}
+    , {nonce, int}
+    , {query_spec, binary}
+    , {response_spec, binary}
+    , {query_fee, int}
+    , {ttl_type, int}
+    , {ttl_value, int}
+    , {fee, int}
+    , {ttl, int}
+    ].
+
+-spec version() -> non_neg_integer().
+version() ->
+    ?ORACLE_REGISTER_TX_VSN.
+
+for_client(#oracle_register_tx{ account       = AccountPubKey,
+                                nonce         = Nonce,
+                                query_spec    = QuerySpec,
+                                response_spec = ResponseSpec,
+                                query_fee     = QueryFee,
+                                oracle_ttl    = {TTLType, TTLValue},
+                                fee           = Fee,
+                                ttl           = TTL}) ->
+    #{<<"data_schema">> => <<"OracleRegisterTxJSON">>, % swagger schema name
+      <<"vsn">> => version(),
+      <<"account">> => dsdc_base58c:encode(account_pubkey, AccountPubKey),
+      <<"nonce">> => Nonce,
+      <<"query_spec">> => QuerySpec,
+      <<"response_spec">> => ResponseSpec,
+      <<"query_fee">> => QueryFee,
+      <<"oracle_ttl">> => #{<<"type">> => TTLType,
+                            <<"value">> => TTLValue},
+      <<"fee">> => Fee,
+      <<"ttl">> => TTL}.
+
+%% -- Local functions  -------------------------------------------------------
+
+ensure_not_oracle(PubKey, Trees) ->
+    OraclesTree  = dsdc_trees:oracles(Trees),
+    case dsdo_state_tree:lookup_oracle(PubKey, OraclesTree) of
+        {value, _Oracle} -> {error, account_is_already_an_oracle};
+        none             -> ok
+    end.

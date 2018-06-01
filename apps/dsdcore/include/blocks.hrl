@@ -1,0 +1,49 @@
+-include("pow.hrl").
+
+-define(PROTOCOL_VERSION, 14).
+-define(GENESIS_VERSION, ?PROTOCOL_VERSION).
+-define(GENESIS_HEIGHT, 0).
+
+-define(BLOCK_HEADER_HASH_BYTES, 32).
+-define(TXS_HASH_BYTES, 32).
+-define(STATE_HASH_BYTES, 32).
+-define(MINER_PUB_BYTES, 32).
+
+-define(ACCEPTED_FUTURE_BLOCK_TIME_SHIFT, 30 * 60 * 1000). %% 30 min
+
+-define(STORAGE_TYPE_BLOCK,  0).
+-define(STORAGE_TYPE_HEADER, 1).
+-define(STORAGE_TYPE_STATE,  2).
+
+-type(txs_hash() :: <<_:(?TXS_HASH_BYTES*8)>>).
+-type(state_hash() :: <<_:(?STATE_HASH_BYTES*8)>>).
+-type(miner_pubkey() :: <<_:(?MINER_PUB_BYTES*8)>>).
+-type(block_header_hash() :: <<_:(?BLOCK_HEADER_HASH_BYTES*8)>>).
+
+-record(block, {
+          height = 0              :: dsdc_blocks:height(),
+          prev_hash = <<0:?BLOCK_HEADER_HASH_BYTES/unit:8>> :: dsdc_blocks:block_header_hash(),
+          root_hash = <<0:?STATE_HASH_BYTES/unit:8>> :: state_hash(), % Hash of all state Merkle trees
+          txs_hash = <<0:?TXS_HASH_BYTES/unit:8>> :: txs_hash(),
+          txs = []                :: list(dsdtx_sign:signed_tx()),
+          target = ?HIGHEST_TARGET_SCI :: dsdc_pow:sci_int(),
+          nonce = 0               :: non_neg_integer(),
+          time = 0                :: non_neg_integer(),
+          version                 :: non_neg_integer(),
+          pow_evidence = no_value :: dsdc_pow:pow_evidence(),
+          miner = <<0:?MINER_PUB_BYTES/unit:8>> :: miner_pubkey()}).
+
+-record(header, {
+          height = 0              :: dsdc_blocks:height(),
+          prev_hash = <<0:?BLOCK_HEADER_HASH_BYTES/unit:8>> :: dsdc_blocks:block_header_hash(),
+          txs_hash = <<0:?TXS_HASH_BYTES/unit:8>> :: txs_hash(),
+          root_hash = <<>>        :: state_hash(),
+          target = ?HIGHEST_TARGET_SCI :: dsdc_pow:sci_int(),
+          nonce = 0               :: non_neg_integer(),
+          time = 0                :: non_neg_integer(),
+          version                 :: non_neg_integer(),
+          pow_evidence = no_value :: dsdc_pow:pow_evidence(),
+          miner = <<0:?MINER_PUB_BYTES/unit:8>> :: miner_pubkey()}).
+
+-type(header_binary() :: binary()).
+-type(deterministic_header_binary() :: binary()).

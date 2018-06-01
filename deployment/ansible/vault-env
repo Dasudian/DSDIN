@@ -1,0 +1,3 @@
+#!/bin/bash
+
+echo $DSDIN_ANSIBLE_VAULT_PASSWORD

@@ -1,0 +1,89 @@
+%% -*- mode: erlang; erlang-indent-level: 4; indent-tabs-mode: nil -*-
+{application, dsdcore,
+ [{description, "Blockchain for dsdin apps"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { dsdcore_app, []}},
+  {start_phases, [
+                  {create_metrics_probes, []},
+                  {start_reporters, []}
+                 ]},
+  {applications,
+   [kernel,
+    stdlib,
+    crypto,
+    setup,
+    sext,
+    rocksdb,
+    mnesia_rocksdb,
+    parse_trans,
+    eper,
+    syntax_tools,
+    compiler,
+    goldrush,
+    gproc,
+    jobs,
+    hut,
+    bear,
+    folsom,
+    exometer_core,
+    yamerl,
+    lager,
+    dsdutils,
+    msgpack,
+    base58,
+    sha3,
+    enacl,
+    enoise,
+    erlexec,
+    jsx,
+    unicode_util_compat, %% to be removed, not needed in OTP 20
+    idna,
+    dsdcuckoo,
+    dsdtx,
+    dsdvm,
+    dsdoracle,
+    dsdchannel,
+    dsdcontract,
+    dsdns,
+    ranch
+  ]},
+  {env, [
+         {exometer_predefined,
+          {script, "$PRIV_DIR/exometer_predefined.script"}},
+         {exometer_subscribers,
+          [
+           {select,
+            {[
+              {{[dsd,epoch|'_'],counter,enabled},[],['$_']},
+              {{[dsd,epoch|'_'],gauge,enabled},[],['$_']}
+             ],
+             dsdc_metrics_main, [value], default, true}},
+           {select,
+            {[
+              {{[dsd,epoch|'_'],'$1',enabled},[{'=/=','$1',counter},
+                                              {'=/=','$1',gauge}], ['$_']}
+             ],
+             dsdc_metrics_main, default, default, true}}
+          ]},
+         {metrics_probes,
+          [{[dsd,epoch,dsdcore,chain], dsdc_chain_metrics_probe},
+           {[dsd,epoch,dsdcore,tx_pool], dsdc_tx_pool_metrics_probe},
+           {[dsd,epoch,dsdcore,eper] , dsdc_eper_metrics_probe}]},
+         {'$setup_hooks',
+          [
+           {normal, [
+                     {110, {dsdc_peers, check_env, []}},
+                     {110, {dsdcore_app, check_env, []}},
+                     {110, {dsdhttp_app, check_env, []}},
+                     {110, {dsdc_hard_forks, check_env, []}},
+                     {200, {dsdc_db, check_db, []}}
+                    ]}
+          ]}
+        ]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

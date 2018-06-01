@@ -1,0 +1,15 @@
+{application, dsdtx,
+ [{description, "An OTP library defining dsdin transcation behaviour"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

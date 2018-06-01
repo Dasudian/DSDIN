@@ -1,0 +1,22 @@
+{application, utilstils,
+ [{description, "DSDIN utils"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib,
+    lager,
+    gproc,
+    jobs,
+    exometer_core,
+    yamerl
+   ]},
+  {env,[
+        {'$setup_hooks',
+         [
+          {normal, [
+                    {100, {utils_env, read_config, []}}
+                   ]}
+         ]}
+       ]}
+ ]}.

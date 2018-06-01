@@ -1,0 +1,25 @@
+{application, dsdhttp,
+ [{description, "DSDIN HTTP API"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { dsdhttp_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    ssl,
+    inets,
+    cowboy,
+    jsx,
+    lager,
+    jesse,
+    dsdcore,
+    gproc,
+    poolboy
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

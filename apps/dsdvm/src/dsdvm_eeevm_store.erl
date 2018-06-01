@@ -1,0 +1,79 @@
+%%%-------------------------------------------------------------------
+%%% @copyright (C) 2018, Dasudian Technologies
+%%% @doc
+%%%     Handle store
+%%% @end
+%%%-------------------------------------------------------------------
+
+-module(dsdvm_eeevm_store).
+
+-export([ load/2
+        , store/3
+	, init/2
+	, to_binary/1
+        , from_sophia_state/1
+        , to_sophia_state/1
+        ]).
+
+-include("dsdvm_eeevm.hrl").
+
+%%====================================================================
+%% API
+%%====================================================================
+
+-spec init(aect_contracts:store(), dsdvm_eeevm_state:state()) -> dsdvm_eeevm_state:state().
+init(Store, State) -> State#{ storage => binary_to_integer_map(Store) }.
+
+-spec to_binary(dsdvm_eeevm_state:state()) -> aect_contracts:store().
+to_binary(#{ storage := Storage }) -> integer_to_binary_map(Storage).
+
+-spec load(integer(), dsdvm_eeevm_state:state()) -> integer().
+load(Address, State) ->
+    Store = dsdvm_eeevm_state:storage(State),
+    Value = storage_read(Address, Store),
+    Value.
+
+-spec store(integer(), integer(), dsdvm_eeevm_state:state()) -> dsdvm_eeevm_state:state().
+store(Address, Value, State) when is_integer(Value) ->
+    Store = dsdvm_eeevm_state:storage(State),
+    %% Make sure value fits in 256 bits.
+    Value256 = Value band ?MASK256,
+    Store1 = storage_write(Address, Value256, Store),
+    dsdvm_eeevm_state:set_storage(Store1, State).
+
+-spec from_sophia_state(binary()) -> aect_contracts:store().
+from_sophia_state(Data) -> #{<<0>> => Data}.
+
+-spec to_sophia_state(aect_contracts:store()) -> binary().
+to_sophia_state(Store) -> maps:get(<<0>>, Store, <<>>).
+
+%%====================================================================
+%% Internal functions
+%%====================================================================
+
+storage_read(Address, Mem) -> maps:get(Address, Mem, 0).
+
+%% No alignment or size check. Don't use directly.
+storage_write(Address,     0, Mem) -> maps:remove(Address, Mem);
+storage_write(Address, Value, Mem) -> maps:put(Address, Value, Mem).
+
+binary_to_integer_map(ChainStore) ->
+    ToInt = fun(K, Val, Map) ->
+                    Address = binary:decode_unsigned(K),
+                    case binary:decode_unsigned(Val) of
+                        0 -> Map;
+                        V -> Map#{ Address => V }
+                    end
+            end,
+    maps:fold(ToInt, #{}, ChainStore).
+
+integer_to_binary_map(Store) ->
+    ToBin = fun(A, Val, Map) ->
+                    Key = binary:encode_unsigned(A),
+                    case binary:encode_unsigned(Val) of
+                        <<0>> -> Map;
+                        V -> Map#{ Key => V}
+                    end
+            end,
+    maps:fold(ToBin, #{}, Store).
+

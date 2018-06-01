@@ -1,0 +1,17 @@
+{application, dsdvm,
+ [{description, "Virtual machine for DSDIN"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, { dsdvm_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    lager,
+    jsx
+   ]},
+  {env,[]},
+  {modules, []},
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.

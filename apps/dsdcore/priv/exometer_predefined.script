@@ -1,0 +1,18 @@
+%% -*- erlang-indent-level: 4; indent-tabs-mode: nil -*-
+%%
+%% Predefined metrics for the dsdcore app
+%% Note that exometer entries can be added dynamically as well.
+%% See the docs at https://github.com/Feuerlabs/exometer_core
+%% for information about how to create, update and read metrics
+[
+ {[dsd,epoch,dsdcore,mining,blocks_mined]      , counter     , []},
+ {[dsd,epoch,dsdcore,mining,retries]           , counter     , []},
+ {[dsd,epoch,dsdcore,mining,interval]          , histogram   , []},
+ {[dsd,epoch,dsdcore,chain,height]             , gauge       , []},
+ {[dsd,epoch,dsdcore,chain,top_change,interval], histogram   , []},
+ {[dsd,epoch,dsdcore,peers,count]              , gauge       , []},
+ {[dsd,epoch,dsdcore,peers,blocked]            , gauge       , []},
+ {[dsd,epoch,dsdcore,peers,errored]            , gauge       , []},
+ {[dsd,epoch,dsdcore,peers,ping,success]       , counter     , []},
+ {[dsd,epoch,dsdcore,peers,ping,failure]       , counter     , []}
+].

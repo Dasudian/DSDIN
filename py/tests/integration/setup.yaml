@@ -1,0 +1,151 @@
+nodes:
+  # describe known nodes; these can be both local or remote
+  local:
+    start: True # if we should start this node or not
+    host: localhost
+    ports:
+      external_api: 3013
+      internal_api: 3113
+      internal_ws: 3114
+  dev1:
+    start: True
+    host: localhost
+    ports:
+      external_api: 3013
+      internal_api: 3113
+      internal_ws: 3114
+  dev2:
+    start: True
+    host: localhost
+    ports:
+      external_api: 3023
+      internal_api: 3123
+      internal_ws: 3124
+  dev3:
+    start: True
+    host: localhost
+    ports:
+      external_api: 3033
+      internal_api: 3133
+      internal_ws: 3134
+coinbase_reward: 10000000000000000000
+tests: # test specific settings
+  test_use_cases:
+    test_syncing:
+      # Alice should be able to connect to peers on startup and download the
+      # blockchain up to the current height.
+      nodes:
+        bob: dev1
+        alice: dev2
+      blocks_to_mine: 20
+
+    test_persistence:
+      # Bob's downloaded blockchain should persist between restarts. He should
+      # only download updates to his blockchain when his node starts.
+      nodes:
+        bob: dev1
+      blocks_to_mine: 7
+    test_node_discovery_transitively:
+      # Assuming Carol's node only knows about Bob upon startup and that Bob's
+      # node knows Alice, Carol's node should be able to discover Alice and
+      # sync with her node.
+      nodes:
+        alice: dev1
+        bob: dev2
+        carol: dev3
+      blocks_to_mine: 11
+    test_node_discovery_from_common_friend:
+      # Assuming Carol's node only knows about Bob upon startup and that Alice's
+      # node knows Bob, Carol's node should be able to discover Alice and
+      # sync with her node.
+      nodes:
+        alice: dev1
+        bob: dev2
+        carol: dev3
+      blocks_to_mine: 11
+  test_spend_tx:
+    test_not_enough_tokens:
+    # Bob should not be able to send more tokens than he has
+    #
+    # Let's say Bob has 100 tokens. He should not be able to send more than
+    # 100 tokens to Alice.
+    #
+    # If there's an incoming but unconfirmed deposit into Bob's account then Bob
+    # should not be able to use the incoming tokens until the spend transaction
+    # they are in is confirmed.
+      nodes:
+        bob: dev1
+      blocks_to_mine: 3
+      spend_tx:
+        alice_pubkey: ak$v6kQV2Z6uXv2PsUJdv955gE
+        amount: 1000000000000000000000
+        fee: 20
+    test_send_by_name:
+    # Bob registers a name 'bob.aet'
+    # Alice should be able to send tokens to Bob using that name
+      nodes:
+        miner: dev1
+      blocks_to_mine: 3
+      send_tokens:
+        alice: 10
+        bob: 10
+      name_register:
+        name: "bob.aet"
+      spend_tx:
+        amount: 7
+  test_contracts:
+    test_compile_and_call_id:
+      nodes:
+        alice: dev1
+    test_encode_id_call:
+      nodes:
+        alice: dev1
+    test_id_call:
+      nodes:
+        alice: dev1
+  test_unsigned_tx:
+    test_contract_create:
+      nodes:
+        node: dev1
+      blocks_to_mine: 5
+      alice:
+        amount: 1120
+        fee: 1
+      create_contract:
+        code: "0x366000602037620000606200003460205180805180516004146200007b57505b80518051600414620000d857505b5060011951005b805903906000518059600081529081818162000056915b805081590391505090565b8352505060005250f35b8059039060008052f35b5990565b5080620001289080905090565b602001517f696e69740000000000000000000000000000000000000000000000000000000014620000ac576200001f565b50829150620000ba6200006a565b596000815290818181620000ce916200004b565b835250505b905090565b602001517f6d61696e000000000000000000000000000000000000000000000000000000001462000109576200002d565b6020015159506000516200006e90805180826200017291600091505090565b5960008152908181816200013d918091505090565b835250509050620000d3565b825180599081525060208401602084038393509350935050600082136200014957809250505090565b915050806000525959905090509056"
+        vm_version: 1
+        deposit: 2
+        amount: 1
+        gas: 750
+        gas_used: 531
+        gas_price: 1
+        fee: 11
+        call_data: "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000002a00000000000000000000000000000000000000000000000000000000000000046d61696e00000000000000000000000000000000000000000000000000000000"
+    test_contract_call:
+      nodes:
+        node: dev1
+      blocks_to_mine: 7
+      alice:
+        amount: 1200
+        fee: 1
+      contract_call:
+        vm_version: 1
+        fee: 1
+        amount: 10
+        gas: 550
+        gas_used: 530
+        gas_price: 1
+        data:
+          function: main
+          argument: "42"
+    test_spend:
+      nodes:
+        node: dev1
+      blocks_to_mine: 7
+      alice:
+        amount: 50
+        fee: 1
+      spend_tx:
+        amount: 13
+        fee: 1
+        recipient: ak$3WkBeo6uZn

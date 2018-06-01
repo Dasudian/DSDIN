@@ -1,0 +1,202 @@
+%%%-------------------------------------------------------------------
+%% @doc dsdhttp public API
+%% @end
+%%%-------------------------------------------------------------------
+
+-module(dsdhttp_app).
+
+-behaviour(application).
+
+
+-define(DEFAULT_SWAGGER_EXTERNAL_PORT, 8043).
+-define(DEFAULT_SWAGGER_EXTERNAL_LISTEN_ADDRESS, <<"0.0.0.0">>).
+-define(DEFAULT_SWAGGER_INTERNAL_PORT, 8143).
+-define(DEFAULT_SWAGGER_INTERNAL_LISTEN_ADDRESS, <<"127.0.0.1">>).
+
+-define(DEFAULT_WEBSOCKET_INTERNAL_PORT, 8144).
+-define(DEFAULT_WEBSOCKET_LISTEN_ADDRESS, <<"127.0.0.1">>).
+-define(INT_ACCEPTORS_POOLSIZE, 10).
+
+-define(DEFAULT_CHANNEL_WEBSOCKET_PORT, 8044).
+-define(DEFAULT_CHANNEL_WEBSOCKET_LISTEN_ADDRESS, <<"0.0.0.0">>).
+-define(CHANNEL_ACCEPTORS_POOLSIZE, 10).
+
+%% Application callbacks
+-export([start/2, stop/1]).
+
+-export([check_env/0]).
+
+%% Tests only
+-export([ws_handlers_queue_max_size/0]).
+
+%%====================================================================
+%% API
+%%====================================================================
+
+start(_StartType, _StartArgs) ->
+    {ok, Pid} = dsdhttp_sup:start_link(),
+    {ok, _} = ws_task_worker_sup:start_link(),
+    ok = start_http_api(),
+    ok = start_websocket_internal(),
+    ok = start_channel_websocket(),
+    MaxWsHandlers = get_internal_websockets_acceptors(),
+    ok = jobs:add_queue(ws_handlers_queue, [{standard_counter, MaxWsHandlers},
+                                            {max_size, ws_handlers_queue_max_size()}]),
+    ok = jobs:add_queue(sc_ws_handlers_queue, [{standard_counter, get_channel_websockets_acceptors()},
+                                               {max_size, ws_handlers_queue_max_size()}]),
+    gproc:reg({n,l,{epoch, app, dsdhttp}}),
+    {ok, Pid}.
+
+
+%%--------------------------------------------------------------------
+stop(_State) ->
+    ok.
+
+
+%%------------------------------------------------------------------------------
+%% Check user-provided environment
+%%------------------------------------------------------------------------------
+
+check_env() ->
+    %TODO: we need to validate that all tags are present
+    GroupDefaults = #{<<"gossip">>        => true,
+                      <<"name_service">>  => true,
+                      <<"chain">>         => true,
+                      <<"transactions">>  => true,
+                      <<"node_operator">> => true,
+                      <<"dev">>           => true,
+                      <<"debug">>         => true,
+                      <<"obsolete">>      => true
+                      },
+    EnabledGroups =
+        lists:foldl(
+            fun({Key, Default}, Accum) ->
+                Enabled =
+                    case dsdu_env:user_config([<<"http">>, <<"endpoints">>, Key]) of
+                        {ok, Setting} when is_boolean(Setting) ->
+                            Setting;
+                        undefined ->
+                            Default
+                    end,
+                case Enabled of
+                    true -> [Key | Accum];
+                    false -> Accum
+                end
+            end,
+            [],
+            maps:to_list(GroupDefaults)),
+        application:set_env(dsdhttp, enabled_endpoint_groups, EnabledGroups),
+    ok.
+
+%%====================================================================
+%% Internal functions
+%%====================================================================
+
+start_http_api() ->
+    ok = start_http_api(external, dsdhttp_dispatch_ext),
+    ok = start_http_api(internal, dsdhttp_dispatch_int).
+
+start_http_api(Target, LogicHandler) ->
+    PoolSize = get_http_api_acceptors(Target),
+    Port = get_http_api_port(Target),
+    ListenAddress = get_http_api_listen_address(Target),
+
+    Paths = dsdhttp_api_router:get_paths(Target, LogicHandler),
+    Dispatch = cowboy_router:compile([{'_', Paths}]),
+
+    {ok, _} = cowboy:start_clear(Target,
+            [{port, Port},
+             {ip, ListenAddress},
+             {num_acceptors, PoolSize}],
+            #{env => #{dispatch => Dispatch}}
+        ),
+    ok.
+
+start_websocket_internal() ->
+    Port = get_internal_websockets_port(),
+    PoolSize = get_internal_websockets_acceptors(),
+    ListenAddress = get_internal_websockets_listen_address(),
+    Dispatch = cowboy_router:compile([
+        {'_', [
+            {"/websocket", ws_handler, []}
+        ]}
+    ]),
+    {ok, _} = cowboy:start_clear(http,
+            [{port, Port},
+             {ip, ListenAddress},
+             {num_acceptors, PoolSize}],
+            #{env => #{dispatch => Dispatch}}
+        ),
+    ok.
+
+start_channel_websocket() ->
+    Port = get_channel_websockets_port(),
+    PoolSize = get_channel_websockets_acceptors(),
+    ListenAddress = get_channel_websockets_listen_address(),
+    Dispatch = cowboy_router:compile([
+        {'_', [
+            {"/channel", sc_ws_handler, []}
+        ]}
+    ]),
+    {ok, _} = cowboy:start_clear(channels_socket,
+            [{port, Port},
+             {ip, ListenAddress},
+             {num_acceptors, PoolSize}],
+            #{env => #{dispatch => Dispatch}}
+        ),
+    ok.
+
+get_and_parse_ip_address_from_config_or_env(CfgKey, App, EnvKey, Default) ->
+    Config = dsdu_env:user_config_or_env(CfgKey, App, EnvKey, Default),
+    {ok, IpAddress} = inet:parse_address(binary_to_list(Config)),
+    IpAddress.
+
+get_http_api_acceptors(external) ->
+    dsdu_env:user_config_or_env([<<"http">>, <<"external">>, <<"acceptors">>],
+                               dsdhttp, [external, acceptors], ?INT_ACCEPTORS_POOLSIZE);
+get_http_api_acceptors(internal) ->
+    dsdu_env:user_config_or_env([<<"http">>, <<"internal">>, <<"acceptors">>],
+                               dsdhttp, [internal, acceptors], ?INT_ACCEPTORS_POOLSIZE).
+
+get_http_api_port(external) ->
+    dsdu_env:user_config_or_env([<<"http">>, <<"external">>, <<"port">>],
+                               dsdhttp, [external, port], ?DEFAULT_SWAGGER_EXTERNAL_PORT);
+get_http_api_port(internal) ->
+    dsdu_env:user_config_or_env([<<"http">>, <<"internal">>, <<"port">>],
+                               dsdhttp, [internal, port], ?DEFAULT_SWAGGER_INTERNAL_PORT).
+
+
+get_http_api_listen_address(external) ->
+    get_and_parse_ip_address_from_config_or_env([<<"http">>, <<"external">>, <<"listen_address">>],
+                                                dsdhttp, [http, websocket, listen_address], ?DEFAULT_SWAGGER_EXTERNAL_LISTEN_ADDRESS);
+get_http_api_listen_address(internal) ->
+    get_and_parse_ip_address_from_config_or_env([<<"http">>, <<"internal">>, <<"listen_address">>],
+                                                dsdhttp, [http, websocket, listen_address], ?DEFAULT_SWAGGER_INTERNAL_LISTEN_ADDRESS).
+
+get_internal_websockets_listen_address() ->
+    get_and_parse_ip_address_from_config_or_env([<<"websocket">>, <<"internal">>, <<"listen_address">>],
+                                                dsdhttp, [internal, websocket, listen_address], ?DEFAULT_WEBSOCKET_LISTEN_ADDRESS).
+
+get_internal_websockets_port() ->
+    dsdu_env:user_config_or_env([<<"websocket">>, <<"internal">>, <<"port">>],
+                               dsdhttp, [internal, websocket, port], ?DEFAULT_WEBSOCKET_INTERNAL_PORT).
+
+get_internal_websockets_acceptors() ->
+    dsdu_env:user_config_or_env([<<"websocket">>, <<"internal">>, <<"acceptors">>],
+                               dsdhttp, [internal, websocket, handlers], ?INT_ACCEPTORS_POOLSIZE).
+
+ws_handlers_queue_max_size() -> 5.
+
+get_channel_websockets_listen_address() ->
+    get_and_parse_ip_address_from_config_or_env([<<"websocket">>, <<"channel">>, <<"listen_address">>],
+                                                dsdhttp, [channel, websocket,
+                                                         listen_address], ?DEFAULT_CHANNEL_WEBSOCKET_LISTEN_ADDRESS).
+
+get_channel_websockets_port() ->
+    dsdu_env:user_config_or_env([<<"websocket">>, <<"channel">>, <<"port">>],
+                               dsdhttp, [channel, websocket, port], ?DEFAULT_CHANNEL_WEBSOCKET_PORT).
+
+get_channel_websockets_acceptors() ->
+    dsdu_env:user_config_or_env([<<"websocket">>, <<"channel">>, <<"acceptors">>],
+                               dsdhttp, [channel, websocket, handlers], ?CHANNEL_ACCEPTORS_POOLSIZE).
+
