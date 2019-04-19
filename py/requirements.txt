@@ -12,7 +12,7 @@ pycparser==2.18
 PyNaCl==1.2.1
 pystache==0.5.4
 pyyaml>=4.2b1
-requests==2.18.1
+requests>=2.20.0
 rlp==0.6.0
 six==1.10.0
 urllib3>=1.24.2
